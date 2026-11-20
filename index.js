@@ -58,7 +58,7 @@ app.get("/services", async(req, res)=>{
 
 
 // Get one service by its id: GET /services/:id
-app.get("/services/:id", async (req, res) => {
+app.get("/services/:id", verifyToken(customers), async (req, res) => {
     const id = req.params.id
 
     // A MongoDB id is always 24 hex characters.
@@ -269,6 +269,81 @@ app.post("/appointments", verifyToken(customers), async (req, res) => {
     })
 
     res.status(201).send({ message: "Appointment booked", id: result.insertedId })
+})
+
+// List all users for the admin (admin only): GET /users
+app.get("/users", verifyToken(customers), verifyAdmin, async (req, res) => {
+    const users = await customers
+        .find({}, { projection: { name: 1, email: 1, image: 1, role: 1, isBlocked: 1, createdAt: 1 } })
+        .sort({ createdAt: -1 })
+        .toArray()
+
+    res.send(users)
+})
+
+// Block or unblock a user (admin only): PATCH /users/:id/block
+app.patch("/users/:id/block", verifyToken(customers), verifyAdmin, async (req, res) => {
+    const id = req.params.id
+    const isBlocked = req.body.isBlocked
+
+    if (!isValidId(id)) {
+        return res.status(400).send({ message: "Invalid user id" })
+    }
+
+    if (typeof isBlocked !== "boolean") {
+        return res.status(400).send({ message: "isBlocked must be true or false" })
+    }
+
+    if (id === req.user.id) {
+        return res.status(400).send({ message: "You cannot block your own account" })
+    }
+
+    const user = await customers.findOne({ _id: new ObjectId(id) })
+
+    if (!user) {
+        return res.status(404).send({ message: "User not found" })
+    }
+
+    if (user.role === "admin") {
+        return res.status(400).send({ message: "Admin accounts cannot be blocked" })
+    }
+
+    await customers.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { isBlocked, updatedAt: new Date() } }
+    )
+
+    res.send({ message: isBlocked ? "User blocked" : "User unblocked" })
+})
+
+// Make a user an admin (admin only): PATCH /users/:id/role
+app.patch("/users/:id/role", verifyToken(customers), verifyAdmin, async (req, res) => {
+    const id = req.params.id
+
+    if (!isValidId(id)) {
+        return res.status(400).send({ message: "Invalid user id" })
+    }
+
+    const user = await customers.findOne({ _id: new ObjectId(id) })
+
+    if (!user) {
+        return res.status(404).send({ message: "User not found" })
+    }
+
+    if (user.role === "admin") {
+        return res.status(400).send({ message: "This user is already an admin" })
+    }
+
+    if (user.isBlocked) {
+        return res.status(400).send({ message: "Unblock this user before making them an admin" })
+    }
+
+    await customers.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { role: "admin", updatedAt: new Date() } }
+    )
+
+    res.send({ message: "User is now an admin" })
 })
 
 app.listen(PORT, () => {
