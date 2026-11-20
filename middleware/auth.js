@@ -1,21 +1,29 @@
-import jwt from 'jsonwebtoken'
+import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { ObjectId } from 'mongodb'
 
-// Step 1: check the token that the client sends in the
-// "Authorization: Bearer <token>" header.
-// Step 2: load the user from the database, so a blocked user
-// or a changed role is noticed even if the token is still valid.
+
 export function verifyToken(usersCollection) {
+    // BetterAuth publishes its public keys here. jose downloads and caches them.
+    const authUrl = (process.env.AUTH_URL || '').replace(/\/$/, '')
+    const jwks = createRemoteJWKSet(new URL(`${authUrl}/api/auth/jwks`))
+
     return async (req, res, next) => {
-        const header = req.headers.authorization || ''
-        const token = header.startsWith('Bearer ') ? header.slice(7) : ''
+        const authHeader = req.headers.authorization || ''
+        const token = authHeader.split(' ')[1]
 
         if (!token) {
             return res.status(401).send({ message: 'Please sign in first' })
         }
 
         try {
-            const payload = jwt.verify(token, process.env.JWT_SECRET)
+            const { payload } = await jwtVerify(token, jwks, {
+                issuer: authUrl,
+                audience: authUrl,
+            })
+
+            if (!payload.sub || !ObjectId.isValid(payload.sub)) {
+                return res.status(401).send({ message: 'Invalid or expired token' })
+            }
 
             const user = await usersCollection.findOne({
                 _id: new ObjectId(payload.sub),
@@ -37,6 +45,8 @@ export function verifyToken(usersCollection) {
         }
     }
 }
+
+
 
 // Use after verifyToken on routes that only admins may call.
 export function verifyAdmin(req, res, next) {
