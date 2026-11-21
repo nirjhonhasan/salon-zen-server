@@ -4,6 +4,7 @@ import "dotenv/config"
 import serviceRoutes from "./routes/serviceRoutes.js"
 import appointmentRoutes from "./routes/appointmentRoutes.js"
 import userRoutes from "./routes/userRoutes.js"
+import paymentRoutes from "./routes/payments/payments.js"
 
 const PORT = process.env.PORT || 5000
 const app = express()
@@ -18,6 +19,7 @@ app.get("/", (req, res) => {
 // Each file in routes/ handles one group of URLs.
 app.use("/services", serviceRoutes)
 app.use("/appointments", appointmentRoutes)
+app.use("/payments", paymentRoutes)
 app.use(userRoutes) // /customers and /users
 
 app.listen(PORT, () => {

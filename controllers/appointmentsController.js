@@ -1,4 +1,4 @@
-import { services, appointments } from "../config/db.js"
+import { customers, services, appointments } from "../config/db.js"
 import { ObjectId } from "mongodb"
 import { isValidId } from "../utils/isValidId.js"
 import { TIME_SLOTS } from "../config/timeSlots.js"
@@ -84,4 +84,118 @@ export async function createAppointment(req, res) {
     })
 
     res.status(201).send({ message: "Appointment booked", id: result.insertedId })
+}
+
+// GET /appointments/my
+// The logged-in customer sees only their own appointments.
+export async function getMyAppointments(req, res) {
+    // The customer id comes from the verified token, never from the URL or body.
+    const myAppointments = await appointments
+        .find({ customerId: req.user.id })
+        .sort({ createdAt: -1 })
+        .toArray()
+
+    // Load the services of these appointments, so the list can show a name and image.
+    const serviceIds = myAppointments.map((item) => new ObjectId(item.serviceId))
+    const myServices = await services.find({ _id: { $in: serviceIds } }).toArray()
+
+    const result = myAppointments.map((item) => {
+        const service = myServices.find((s) => s._id.toString() === item.serviceId)
+
+        return {
+            ...item,
+            serviceName: service ? service.serviceName : "Service removed",
+            serviceImage: service ? service.image : "",
+        }
+    })
+
+    res.send(result)
+}
+
+// PATCH /appointments/:id/confirm
+// Admin confirms an appointment. Only pending appointments can be confirmed.
+export async function confirmAppointment(req, res) {
+    const id = req.params.id
+
+    if (!isValidId(id)) {
+        return res.status(400).send({ message: "Invalid appointment id" })
+    }
+
+    const appointment = await appointments.findOne({ _id: new ObjectId(id) })
+
+    if (!appointment) {
+        return res.status(404).send({ message: "Appointment not found" })
+    }
+
+    if (appointment.status !== "pending") {
+        return res.status(400).send({ message: "Only pending appointments can be confirmed" })
+    }
+
+    await appointments.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: "confirmed" } }
+    )
+
+    res.send({ message: "Appointment confirmed" })
+}
+
+// GET /appointments
+// Admin sees every appointment, with the customer and service details.
+export async function getAllAppointments(req, res) {
+    const all = await appointments.find({}).sort({ createdAt: -1 }).toArray()
+
+    const serviceIds = [...new Set(all.map((item) => item.serviceId))].filter(isValidId)
+    const customerIds = [...new Set(all.map((item) => item.customerId))].filter(isValidId)
+
+    const relatedServices = await services
+        .find({ _id: { $in: serviceIds.map((id) => new ObjectId(id)) } })
+        .toArray()
+    const relatedCustomers = await customers
+        .find({ _id: { $in: customerIds.map((id) => new ObjectId(id)) } })
+        .project({ name: 1, email: 1, image: 1 })
+        .toArray()
+
+    const result = all.map((item) => {
+        const service = relatedServices.find((s) => s._id.toString() === item.serviceId)
+        const customer = relatedCustomers.find((c) => c._id.toString() === item.customerId)
+
+        return {
+            ...item,
+            serviceName: service ? service.serviceName : "Service removed",
+            serviceImage: service ? service.image : "",
+            serviceCategory: service ? service.category : "",
+            customerName: customer ? customer.name : "User removed",
+            customerEmail: customer ? customer.email : "",
+            customerImage: customer ? customer.image : "",
+        }
+    })
+
+    res.send(result)
+}
+
+// PATCH /appointments/:id/cancel
+// Admin cancels an appointment. Pending or confirmed appointments can be cancelled.
+export async function cancelAppointment(req, res) {
+    const id = req.params.id
+
+    if (!isValidId(id)) {
+        return res.status(400).send({ message: "Invalid appointment id" })
+    }
+
+    const appointment = await appointments.findOne({ _id: new ObjectId(id) })
+
+    if (!appointment) {
+        return res.status(404).send({ message: "Appointment not found" })
+    }
+
+    if (appointment.status !== "pending" && appointment.status !== "confirmed") {
+        return res.status(400).send({ message: "Only pending or confirmed appointments can be cancelled" })
+    }
+
+    await appointments.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: "cancelled" } }
+    )
+
+    res.send({ message: "Appointment cancelled" })
 }
