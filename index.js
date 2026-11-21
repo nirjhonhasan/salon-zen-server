@@ -104,7 +104,7 @@ app.get("/", (req, res) => {
     res.send("Welcome to server 5000")
 })
 
-// Each file in routes/ handles one group of URLs.
+
 app.use("/services", serviceRoutes)
 app.use("/appointments", appointmentRoutes)
 app.use("/payments", paymentRoutes)
