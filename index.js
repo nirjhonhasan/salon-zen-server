@@ -4,6 +4,7 @@ import "dotenv/config"
 import serviceRoutes from "./routes/serviceRoutes.js"
 import appointmentRoutes from "./routes/appointmentRoutes.js"
 import userRoutes from "./routes/userRoutes.js"
+import transactionRoutes from "./routes/transactionRoutes.js"
 import paymentRoutes from "./routes/payments/payments.js"
 import { stripe } from "./config/stripe.js"
 import { ObjectId } from "mongodb"
@@ -107,6 +108,7 @@ app.get("/", (req, res) => {
 app.use("/services", serviceRoutes)
 app.use("/appointments", appointmentRoutes)
 app.use("/payments", paymentRoutes)
+app.use("/transactions", transactionRoutes)
 app.use(userRoutes) // /customers and /users
 
 app.listen(PORT, () => {

@@ -3,7 +3,7 @@ import { ObjectId } from "mongodb";
 import { isValidId } from "../utils/isValidId.js";
 import { TIME_SLOTS } from "../config/timeSlots.js";
 
-// ১. ওই তারিখে কোন স্লটগুলো বুক হয়ে গেছে তা বের করা
+
 export async function getBookedSlots(req, res) {
   const { serviceId, date } = req.query;
 
@@ -23,7 +23,7 @@ export async function getBookedSlots(req, res) {
   res.send({ slots });
 }
 
-// ২. নতুন বুকিং তৈরি করা (এবং ডাবল বুকিং ঠেকানো)
+
 export async function createAppointment(req, res) {
   if (req.user?.role === "admin") {
     return res.status(403).send({ message: "Admin cannot book appointments" });
@@ -49,7 +49,6 @@ export async function createAppointment(req, res) {
     return res.status(404).send({ message: "Service not found" });
   }
 
-  // একই সময়ে আগে থেকে বুকিং আছে কি না চেক করা
   const alreadyBooked = await appointments.findOne({
     serviceId,
     appointmentDate,
@@ -77,7 +76,7 @@ export async function createAppointment(req, res) {
   res.status(201).send({ message: "Appointment booked", id: result.insertedId });
 }
 
-// ৩. নিজের বুকিংগুলো দেখা
+
 export async function getMyAppointments(req, res) {
   const myList = await appointments
     .find({ customerId: req.user.id })
@@ -108,7 +107,7 @@ export async function getMyAppointments(req, res) {
   res.send(finalList);
 }
 
-// ৪. অ্যাডমিন বুকিং কনফার্ম করবে
+
 export async function confirmAppointment(req, res) {
   const { id } = req.params;
 
@@ -133,7 +132,7 @@ export async function confirmAppointment(req, res) {
   res.send({ message: "Appointment confirmed" });
 }
 
-// ৫. অ্যাডমিন সব বুকিং দেখবে
+
 export async function getAllAppointments(req, res) {
   const allBookings = await appointments.find({}).sort({ createdAt: -1 }).toArray();
   const finalList = [];
@@ -172,7 +171,7 @@ export async function getAllAppointments(req, res) {
   res.send(finalList);
 }
 
-// ৬. বুকিং ক্যান্সেল করা
+
 export async function cancelAppointment(req, res) {
   const { id } = req.params;
 
@@ -187,6 +186,34 @@ export async function cancelAppointment(req, res) {
 
   if (booking.status === "cancelled") {
     return res.status(400).send({ message: "Already cancelled" });
+  }
+
+  await appointments.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { status: "cancelled" } }
+  );
+
+  res.send({ message: "Appointment cancelled" });
+}
+
+// Customer cancels their OWN appointment: PATCH /appointments/:id/cancel-mine
+// Only a pending appointment can be cancelled by the customer.
+export async function cancelMyAppointment(req, res) {
+  const { id } = req.params;
+
+  if (!isValidId(id)) {
+    return res.status(400).send({ message: "Invalid appointment id" });
+  }
+
+  const booking = await appointments.findOne({ _id: new ObjectId(id) });
+
+  
+  if (!booking || booking.customerId !== req.user.id) {
+    return res.status(404).send({ message: "Appointment not found" });
+  }
+
+  if (booking.status !== "pending") {
+    return res.status(400).send({ message: "Only pending appointments can be cancelled" });
   }
 
   await appointments.updateOne(
