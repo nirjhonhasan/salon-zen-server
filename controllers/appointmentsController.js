@@ -1,201 +1,198 @@
-import { customers, services, appointments } from "../config/db.js"
-import { ObjectId } from "mongodb"
-import { isValidId } from "../utils/isValidId.js"
-import { TIME_SLOTS } from "../config/timeSlots.js"
+import { customers, services, appointments } from "../config/db.js";
+import { ObjectId } from "mongodb";
+import { isValidId } from "../utils/isValidId.js";
+import { TIME_SLOTS } from "../config/timeSlots.js";
 
-// GET /appointments/booked
+// ১. ওই তারিখে কোন স্লটগুলো বুক হয়ে গেছে তা বের করা
 export async function getBookedSlots(req, res) {
-    const { serviceId, date } = req.query
+  const { serviceId, date } = req.query;
 
-    if (typeof serviceId !== "string" || typeof date !== "string") {
-        return res.status(400).send({ message: "serviceId and date are required" })
-    }
+  if (!serviceId || !date) {
+    return res.status(400).send({ message: "serviceId and date are required" });
+  }
 
-    const taken = await appointments
-        .find({ serviceId, appointmentDate: date, status: { $in: ["pending", "confirmed"] } })
-        .toArray()
+  const taken = await appointments
+    .find({
+      serviceId: String(serviceId),
+      appointmentDate: String(date),
+      status: { $in: ["pending", "confirmed"] },
+    })
+    .toArray();
 
-    res.send({ slots: taken.map((item) => item.timeSlot) })
+  const slots = taken.map((item) => item.timeSlot);
+  res.send({ slots });
 }
 
-// POST /appointments
+// ২. নতুন বুকিং তৈরি করা (এবং ডাবল বুকিং ঠেকানো)
 export async function createAppointment(req, res) {
-    if (req.user.role === "admin") {
-        return res.status(403).send({ message: "Admin accounts cannot book appointments" })
-    }
+  if (req.user?.role === "admin") {
+    return res.status(403).send({ message: "Admin cannot book appointments" });
+  }
 
-    const { serviceId, appointmentDate, timeSlot } = req.body
-    const message = typeof req.body.message === "string" ? req.body.message.trim() : ""
+  const { serviceId, appointmentDate, timeSlot, message = "" } = req.body;
 
-    if (typeof serviceId !== "string" || !isValidId(serviceId)) {
-        return res.status(400).send({ message: "Invalid service id" })
-    }
+  if (!serviceId || !isValidId(serviceId)) {
+    return res.status(400).send({ message: "Invalid service id" });
+  }
 
-    if (typeof appointmentDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(appointmentDate)) {
-        return res.status(400).send({ message: "Please choose a valid date" })
-    }
+  if (!appointmentDate || !TIME_SLOTS.includes(timeSlot)) {
+    return res.status(400).send({ message: "Date and valid time slot are required" });
+  }
 
-    // Compare as text (YYYY-MM-DD) so time zones cannot shift the day.
-    const today = new Date().toISOString().slice(0, 10)
-    if (appointmentDate < today) {
-        return res.status(400).send({ message: "The date cannot be in the past" })
-    }
+  const today = new Date().toISOString().slice(0, 10);
+  if (appointmentDate < today) {
+    return res.status(400).send({ message: "Past date is not allowed" });
+  }
 
-    if (!TIME_SLOTS.includes(timeSlot)) {
-        return res.status(400).send({ message: "Please choose a valid time slot" })
-    }
+  const service = await services.findOne({ _id: new ObjectId(serviceId) });
+  if (!service) {
+    return res.status(404).send({ message: "Service not found" });
+  }
 
-    if (message.length > 500) {
-        return res.status(400).send({ message: "Message is too long (500 characters max)" })
-    }
+  // একই সময়ে আগে থেকে বুকিং আছে কি না চেক করা
+  const alreadyBooked = await appointments.findOne({
+    serviceId,
+    appointmentDate,
+    timeSlot,
+    status: { $in: ["pending", "confirmed"] },
+  });
 
-    const service = await services.findOne({ _id: new ObjectId(serviceId) })
+  if (alreadyBooked) {
+    return res.status(409).send({ message: "This time slot is already booked" });
+  }
 
-    if (!service) {
-        return res.status(404).send({ message: "Service not found" })
-    }
+  const newAppointment = {
+    serviceId,
+    customerId: req.user.id,
+    appointmentDate,
+    timeSlot,
+    message: String(message).trim(),
+    servicePrice: service.price,
+    paymentStatus: "unpaid",
+    status: "pending",
+    createdAt: new Date(),
+  };
 
-    if (service.status !== "active") {
-        return res.status(400).send({ message: "This service is not available for booking" })
-    }
-
-    // Only pending or confirmed appointments block a slot.
-    const conflict = await appointments.findOne({
-        serviceId,
-        appointmentDate,
-        timeSlot,
-        status: { $in: ["pending", "confirmed"] },
-    })
-
-    if (conflict) {
-        return res.status(409).send({ message: "This time slot is already booked. Please pick another." })
-    }
-
-    const result = await appointments.insertOne({
-        serviceId,
-        customerId: req.user.id, // from the verified token, never from the body
-        appointmentDate,
-        timeSlot,
-        message,
-        servicePrice: service.price, // copied from the service, never from the client
-        paymentStatus: "unpaid",
-        status: "pending",
-        createdAt: new Date(),
-    })
-
-    res.status(201).send({ message: "Appointment booked", id: result.insertedId })
+  const result = await appointments.insertOne(newAppointment);
+  res.status(201).send({ message: "Appointment booked", id: result.insertedId });
 }
 
-// GET /appointments/my
-// The logged-in customer sees only their own appointments.
+// ৩. নিজের বুকিংগুলো দেখা
 export async function getMyAppointments(req, res) {
-    // The customer id comes from the verified token, never from the URL or body.
-    const myAppointments = await appointments
-        .find({ customerId: req.user.id })
-        .sort({ createdAt: -1 })
-        .toArray()
+  const myList = await appointments
+    .find({ customerId: req.user.id })
+    .sort({ createdAt: -1 })
+    .toArray();
 
-    // Load the services of these appointments, so the list can show a name and image.
-    const serviceIds = myAppointments.map((item) => new ObjectId(item.serviceId))
-    const myServices = await services.find({ _id: { $in: serviceIds } }).toArray()
+  const finalList = [];
 
-    const result = myAppointments.map((item) => {
-        const service = myServices.find((s) => s._id.toString() === item.serviceId)
+  for (const item of myList) {
+    let serviceName = "Service removed";
+    let serviceImage = "";
 
-        return {
-            ...item,
-            serviceName: service ? service.serviceName : "Service removed",
-            serviceImage: service ? service.image : "",
-        }
-    })
+    if (isValidId(item.serviceId)) {
+      const service = await services.findOne({ _id: new ObjectId(item.serviceId) });
+      if (service) {
+        serviceName = service.serviceName;
+        serviceImage = service.image;
+      }
+    }
 
-    res.send(result)
+    finalList.push({
+      ...item,
+      serviceName,
+      serviceImage,
+    });
+  }
+
+  res.send(finalList);
 }
 
-// PATCH /appointments/:id/confirm
-// Admin confirms an appointment. Only pending appointments can be confirmed.
+// ৪. অ্যাডমিন বুকিং কনফার্ম করবে
 export async function confirmAppointment(req, res) {
-    const id = req.params.id
+  const { id } = req.params;
 
-    if (!isValidId(id)) {
-        return res.status(400).send({ message: "Invalid appointment id" })
-    }
+  if (!isValidId(id)) {
+    return res.status(400).send({ message: "Invalid appointment id" });
+  }
 
-    const appointment = await appointments.findOne({ _id: new ObjectId(id) })
+  const booking = await appointments.findOne({ _id: new ObjectId(id) });
+  if (!booking) {
+    return res.status(404).send({ message: "Appointment not found" });
+  }
 
-    if (!appointment) {
-        return res.status(404).send({ message: "Appointment not found" })
-    }
+  if (booking.status !== "pending") {
+    return res.status(400).send({ message: "Only pending booking can be confirmed" });
+  }
 
-    if (appointment.status !== "pending") {
-        return res.status(400).send({ message: "Only pending appointments can be confirmed" })
-    }
+  await appointments.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { status: "confirmed" } }
+  );
 
-    await appointments.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { status: "confirmed" } }
-    )
-
-    res.send({ message: "Appointment confirmed" })
+  res.send({ message: "Appointment confirmed" });
 }
 
-// GET /appointments
-// Admin sees every appointment, with the customer and service details.
+// ৫. অ্যাডমিন সব বুকিং দেখবে
 export async function getAllAppointments(req, res) {
-    const all = await appointments.find({}).sort({ createdAt: -1 }).toArray()
+  const allBookings = await appointments.find({}).sort({ createdAt: -1 }).toArray();
+  const finalList = [];
 
-    const serviceIds = [...new Set(all.map((item) => item.serviceId))].filter(isValidId)
-    const customerIds = [...new Set(all.map((item) => item.customerId))].filter(isValidId)
+  for (const item of allBookings) {
+    let serviceName = "Service removed";
+    let serviceImage = "";
+    let customerName = "User removed";
+    let customerEmail = "";
 
-    const relatedServices = await services
-        .find({ _id: { $in: serviceIds.map((id) => new ObjectId(id)) } })
-        .toArray()
-    const relatedCustomers = await customers
-        .find({ _id: { $in: customerIds.map((id) => new ObjectId(id)) } })
-        .project({ name: 1, email: 1, image: 1 })
-        .toArray()
+    if (isValidId(item.serviceId)) {
+      const service = await services.findOne({ _id: new ObjectId(item.serviceId) });
+      if (service) {
+        serviceName = service.serviceName;
+        serviceImage = service.image;
+      }
+    }
 
-    const result = all.map((item) => {
-        const service = relatedServices.find((s) => s._id.toString() === item.serviceId)
-        const customer = relatedCustomers.find((c) => c._id.toString() === item.customerId)
+    if (isValidId(item.customerId)) {
+      const customer = await customers.findOne({ _id: new ObjectId(item.customerId) });
+      if (customer) {
+        customerName = customer.name;
+        customerEmail = customer.email;
+      }
+    }
 
-        return {
-            ...item,
-            serviceName: service ? service.serviceName : "Service removed",
-            serviceImage: service ? service.image : "",
-            serviceCategory: service ? service.category : "",
-            customerName: customer ? customer.name : "User removed",
-            customerEmail: customer ? customer.email : "",
-            customerImage: customer ? customer.image : "",
-        }
-    })
+    finalList.push({
+      ...item,
+      serviceName,
+      serviceImage,
+      customerName,
+      customerEmail,
+    });
+  }
 
-    res.send(result)
+  res.send(finalList);
 }
 
-// PATCH /appointments/:id/cancel
-// Admin cancels an appointment. Pending or confirmed appointments can be cancelled.
+// ৬. বুকিং ক্যান্সেল করা
 export async function cancelAppointment(req, res) {
-    const id = req.params.id
+  const { id } = req.params;
 
-    if (!isValidId(id)) {
-        return res.status(400).send({ message: "Invalid appointment id" })
-    }
+  if (!isValidId(id)) {
+    return res.status(400).send({ message: "Invalid appointment id" });
+  }
 
-    const appointment = await appointments.findOne({ _id: new ObjectId(id) })
+  const booking = await appointments.findOne({ _id: new ObjectId(id) });
+  if (!booking) {
+    return res.status(404).send({ message: "Appointment not found" });
+  }
 
-    if (!appointment) {
-        return res.status(404).send({ message: "Appointment not found" })
-    }
+  if (booking.status === "cancelled") {
+    return res.status(400).send({ message: "Already cancelled" });
+  }
 
-    if (appointment.status !== "pending" && appointment.status !== "confirmed") {
-        return res.status(400).send({ message: "Only pending or confirmed appointments can be cancelled" })
-    }
+  await appointments.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { status: "cancelled" } }
+  );
 
-    await appointments.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { status: "cancelled" } }
-    )
-
-    res.send({ message: "Appointment cancelled" })
+  res.send({ message: "Appointment cancelled" });
 }

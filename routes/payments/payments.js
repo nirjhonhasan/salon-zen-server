@@ -59,9 +59,6 @@ router.post("/create-checkout-session", verifyToken(customers), async (req, res)
         console.error("Checkout error:", error)
         res.status(500).json({ error: "Could not start the payment" })
     }
-    console.log(session, "session for stripe");
-    res.send({success: true})
-    
 })
 
 export default router
